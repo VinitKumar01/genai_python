@@ -1,9 +1,11 @@
+from openai.types.chat import ChatCompletionMessageParam
 import requests
-import re
 from openai import OpenAI
 from dotenv import load_dotenv
 import os
 import json
+from pydantic import BaseModel, Field
+from typing import Optional
 
 load_dotenv()
 
@@ -88,32 +90,23 @@ PLAN: { "step": "PLAN", "content": "Great i got the weather info about delhi" }
 OUTPUT: { "step": "OUTPUT", "content": "The current weather for delhi is 20 C with cloudy sky." }
 """
 
-message_history = [
+
+class ResponseFormat(BaseModel):
+    step: str = Field(
+        ..., description="The id of the step like START, PLAN, OUTPUT, TOOL, OBSERVE"
+    )
+    content: Optional[str] = Field(None, description="The optional string content")
+    tool: Optional[str] = Field(None, description="The id of the tool call")
+    input: Optional[str] = Field(None, description="The input parms for the tool")
+    output: Optional[str] = Field(None, description="The output of the tool call")
+
+
+message_history: list[ChatCompletionMessageParam] = [
     {"role": "system", "content": SYSTEM_PROMPT},
 ]
 
 user_query = input("> ")
 message_history.append({"role": "user", "content": user_query})
-
-
-def extract_json_objects(text):
-    objects = []
-    stack = []
-    start = None
-
-    for i, char in enumerate(text):
-        if char == "{":
-            if not stack:
-                start = i
-            stack.append("{")
-        elif char == "}":
-            if stack:
-                stack.pop()
-                if not stack and start is not None:
-                    objects.append(text[start : i + 1])
-                    start = None
-    return objects
-
 
 VALID_STEPS = {"START", "PLAN", "OUTPUT", "TOOL", "OBSERVE"}
 
@@ -125,18 +118,15 @@ retry_count = 0
 while step_count < max_steps:
     step_count += 1
 
-    response = client.chat.completions.create(
+    response = client.chat.completions.parse(
         model="openai/gpt-oss-120b:free",
         messages=message_history,
+        response_format=ResponseFormat,
     )
 
-    raw_response = response.choices[0].message.content.strip()
+    parsed_response = response.choices[0].message.parsed
 
-    raw_response = re.sub(r"<think>.*?</think>", "", raw_response, flags=re.S).strip()
-
-    json_objects = extract_json_objects(raw_response)
-
-    if not json_objects:
+    if not parsed_response:
         retry_count += 1
         print("⚠️ Model returned no JSON — retrying...")
 
@@ -154,35 +144,36 @@ while step_count < max_steps:
 
     retry_count = 0
 
-    for obj in json_objects:
-        try:
-            parsed = json.loads(obj)
-            step_type = parsed.get("step")
-            content = parsed.get("content", "")
+    try:
+        step_type = parsed_response.step
 
-            if step_type not in VALID_STEPS:
-                print("⚠️ Skipping invalid step:")
-                print(obj)
-                continue
+        if step_type not in VALID_STEPS:
+            print("⚠️ Skipping invalid step:")
+            print(step_type)
+            continue
 
-            message_history.append({"role": "assistant", "content": obj})
+        message_history.append(
+            {"role": "assistant", "content": json.dumps(parsed_response.model_dump())}
+        )
 
-            if step_type == "START":
-                print(f"🔥 {content}")
+        if step_type == "START":
+            print(f"🔥 {parsed_response.content}")
 
-            elif step_type == "PLAN":
-                print(f"🧠 {content}")
+        elif step_type == "PLAN":
+            print(f"🧠 {parsed_response.content}")
 
-            elif step_type == "TOOL":
-                tool_to_call = parsed.get("tool")
-                tool_input = parsed.get("input")
+        elif step_type == "TOOL":
+            tool_to_call = parsed_response.tool
+            tool_input = parsed_response.input
+            if isinstance(tool_to_call, str) and isinstance(tool_input, str):
                 print(f"🛠️: {tool_to_call} {tool_input}")
 
                 tool_response = available_tools[tool_to_call](tool_input)
 
                 message_history.append(
                     {
-                        "role": "developer",
+                        "role": "tool",
+                        "tool_call_id": tool_to_call,
                         "content": json.dumps(
                             {
                                 "step": "OBSERVE",
@@ -193,13 +184,15 @@ while step_count < max_steps:
                         ),
                     }
                 )
+            else:
+                continue
 
-            elif step_type == "OUTPUT":
-                print(f"🤖 {content}")
-                exit()
+        elif step_type == "OUTPUT":
+            print(f"🤖 {parsed_response.content}")
+            exit()
 
-        except json.JSONDecodeError:
-            print("⚠️ Skipping malformed JSON:")
-            print(obj)
+    except json.JSONDecodeError:
+        print("⚠️ Skipping malformed JSON:")
+        print(parsed_response)
 
 print("⚠️ Max steps reached — stopping.")
