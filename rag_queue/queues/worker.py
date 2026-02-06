@@ -48,11 +48,12 @@ def process_query(user_query: str):
 
     message_history: list[ChatCompletionMessageParam] = [
         {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": user_query},
     ]
 
     response = client.chat.completions.create(
-        model="gemini-2.5-pro",
+        model="gemini-2.5-flash",
         messages=message_history,
     )
 
-    print(f"{response.choices[0].message.content}")
+    return f"{response.choices[0].message.content}"
