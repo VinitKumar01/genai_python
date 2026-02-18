@@ -2,12 +2,29 @@ from openai import OpenAI
 import speech_recognition as sr
 import os
 from dotenv import load_dotenv
+from elevenlabs.client import ElevenLabs
+from elevenlabs.play import play
 
 load_dotenv()
 
-api_key = os.getenv("GEMINI_API_KEY")
-if not api_key:
+gemini_api_key = os.getenv("GEMINI_API_KEY")
+if not gemini_api_key:
     raise RuntimeError("GEMINI_API_KEY not set")
+
+eleven_labs_api_key = os.getenv("ELEVENLABS_API_KEY")
+if not eleven_labs_api_key:
+    raise RuntimeError("ELEVENLABS_API_KEY not set")
+
+eleven_client = ElevenLabs(api_key=eleven_labs_api_key)
+
+
+def speak(text: str):
+    audio = eleven_client.text_to_speech.convert(
+        voice_id="EXAVITQu4vr4xnSDxMaL",
+        model_id="eleven_multilingual_v2",
+        text=text,
+    )
+    play(audio)
 
 
 def main():
@@ -15,7 +32,7 @@ def main():
 
     client = OpenAI(
         base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-        api_key=api_key,
+        api_key=gemini_api_key,
     )
 
     with sr.Microphone() as source:
@@ -45,7 +62,15 @@ def main():
         ],
     )
 
-    print(response.choices[0].message.content)
+    reply = response.choices[0].message.content
+
+    if reply is None:
+        print("Failed to get response.")
+        return
+
+    print("Reply:", reply)
+
+    speak(reply)
 
 
 main()
